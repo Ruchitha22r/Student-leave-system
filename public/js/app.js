@@ -196,7 +196,7 @@ document.addEventListener("DOMContentLoaded", function () {
                     if (data.success) {
 
                         alert(
-                            "Registration successful!"
+                            "Registration submitted. Please wait for admin approval before logging in."
                         );
 
 
@@ -1818,3 +1818,85 @@ async function loadAdminStudents() {
     }
 
 }
+
+// Student/staff registration and staff login, plus admin approval queue.
+document.addEventListener("DOMContentLoaded", () => {
+    const studentForm = document.getElementById("registerForm");
+    if (studentForm) {
+        // The existing registration handler remains responsible for submission.
+    }
+
+    const staffRegisterForm = document.getElementById("staffRegisterForm");
+    if (staffRegisterForm) {
+        staffRegisterForm.addEventListener("submit", async (event) => {
+            event.preventDefault();
+            const payload = {
+                staffId: document.getElementById("staffId").value.trim(),
+                name: document.getElementById("name").value.trim(),
+                email: document.getElementById("email").value.trim(),
+                department: document.getElementById("department").value.trim(),
+                password: document.getElementById("password").value
+            };
+            try {
+                const response = await fetch("/api/staff/register", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+                const data = await response.json();
+                alert(data.message);
+                if (data.success) { staffRegisterForm.reset(); window.location.href = "/staff-login.html"; }
+            } catch (error) { console.error(error); alert("Unable to connect to server."); }
+        });
+    }
+
+    const staffLoginForm = document.getElementById("staffLoginForm");
+    if (staffLoginForm) {
+        staffLoginForm.addEventListener("submit", async (event) => {
+            event.preventDefault();
+            try {
+                const response = await fetch("/api/staff/login", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ staffId: document.getElementById("staffId").value.trim(), password: document.getElementById("password").value }) });
+                const data = await response.json();
+                if (!data.success) { alert(data.message); return; }
+                localStorage.setItem("staff", JSON.stringify(data.staff));
+                alert("Login successful!");
+                // A dedicated staff portal can be added to the existing leave workflow next.
+                window.location.href = "/dashboard.html";
+            } catch (error) { console.error(error); alert("Unable to connect to server."); }
+        });
+    }
+
+    const loadButton = document.getElementById("loadRegistrationsButton");
+    const approvals = document.getElementById("registrationApprovals");
+    if (loadButton && approvals) {
+        const loadRegistrations = async () => {
+            approvals.textContent = "Loading registrations...";
+            try {
+                const response = await fetch("/api/admin/registrations");
+                const data = await response.json();
+                if (!data.success) throw new Error(data.message || "Unable to load registrations.");
+                const pending = data.registrations.filter(item => item.status === "Pending");
+                approvals.replaceChildren();
+                if (!pending.length) { approvals.textContent = "No pending registrations."; return; }
+                pending.forEach(item => {
+                    const card = document.createElement("div");
+                    card.style.cssText = "background:#fff;border:1px solid #ddd;border-radius:8px;padding:14px;margin:12px 0;";
+                    const details = document.createElement("p");
+                    details.textContent = `${item.role.toUpperCase()} | ${item.user_id} | ${item.name} | ${item.email} | ${item.department} | Status: ${item.status}`;
+                    const approve = document.createElement("button");
+                    approve.type = "button"; approve.textContent = "Approve"; approve.style.marginBottom = "8px";
+                    approve.addEventListener("click", () => updateRegistration(item, "Approved"));
+                    const reject = document.createElement("button");
+                    reject.type = "button"; reject.textContent = "Reject"; reject.style.backgroundColor = "#b91c1c";
+                    reject.addEventListener("click", () => updateRegistration(item, "Rejected"));
+                    card.append(details, approve, reject); approvals.appendChild(card);
+                });
+            } catch (error) { approvals.textContent = error.message || "Unable to load registrations."; }
+        };
+        const updateRegistration = async (item, status) => {
+            try {
+                const response = await fetch(`/api/admin/registrations/${item.role}/${item.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ status }) });
+                const data = await response.json();
+                alert(data.message);
+                if (data.success) loadRegistrations();
+            } catch (error) { console.error(error); alert("Unable to update registration."); }
+        };
+        loadButton.addEventListener("click", loadRegistrations);
+    }
+});
