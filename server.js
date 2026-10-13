@@ -68,9 +68,10 @@ app.post(
                 name,
                 email,
                 password,
-                department
+                department,
+                status
             )
-            VALUES (?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, 'Pending')
         `;
 
 
@@ -179,7 +180,8 @@ app.post(
                 student_id,
                 name,
                 email,
-                department
+                department,
+                status
             FROM students
             WHERE student_id = ?
             AND password = ?
@@ -228,16 +230,19 @@ app.post(
                 }
 
 
+                if (student.status !== "Approved") {
+                    return res.status(403).json({
+                        success: false,
+                        message: student.status === "Rejected"
+                            ? "Your registration was rejected. Please contact the administrator."
+                            : "Your account is awaiting admin approval. You cannot log in yet."
+                    });
+                }
+
                 res.json({
-
                     success: true,
-
-                    message:
-                        "Login successful!",
-
-                    student:
-                        student
-
+                    message: "Login successful!",
+                    student: student
                 });
 
             }
@@ -246,6 +251,70 @@ app.post(
     }
 );
 
+
+// ========================================
+// STAFF REGISTRATION AND LOGIN
+// ========================================
+app.post("/api/staff/register", (req, res) => {
+    const { staffId, name, email, password, department } = req.body;
+    if (!staffId || !name || !email || !password || !department) {
+        return res.status(400).json({ success: false, message: "Please fill in all fields." });
+    }
+    db.run(
+        "INSERT INTO staff (staff_id, name, email, password, department, status) VALUES (?, ?, ?, ?, ?, 'Pending')",
+        [staffId, name, email, password, department],
+        function (err) {
+            if (err) {
+                const duplicate = err.message.includes("UNIQUE constraint failed");
+                return res.status(duplicate ? 400 : 500).json({
+                    success: false,
+                    message: duplicate ? "Staff ID or email already exists." : "Staff registration failed."
+                });
+            }
+            res.json({ success: true, message: "Registration submitted. Please wait for admin approval." });
+        }
+    );
+});
+
+app.post("/api/staff/login", (req, res) => {
+    const { staffId, password } = req.body;
+    if (!staffId || !password) {
+        return res.status(400).json({ success: false, message: "Staff ID and password are required." });
+    }
+    db.get("SELECT id, staff_id, name, email, department, status FROM staff WHERE staff_id = ? AND password = ?", [staffId, password], (err, user) => {
+        if (err) return res.status(500).json({ success: false, message: "Login failed." });
+        if (!user) return res.status(401).json({ success: false, message: "Invalid Staff ID or password." });
+        if (user.status !== "Approved") {
+            return res.status(403).json({ success: false, message: user.status === "Rejected" ? "Your registration was rejected. Please contact the administrator." : "Your account is awaiting admin approval." });
+        }
+        res.json({ success: true, message: "Login successful!", staff: user });
+    });
+});
+
+// Admin registration queue for both roles.
+app.get("/api/admin/registrations", (req, res) => {
+    const sql = `SELECT id, student_id AS user_id, name, email, department, status, created_at, 'student' AS role FROM students
+        UNION ALL SELECT id, staff_id AS user_id, name, email, department, status, created_at, 'staff' AS role FROM staff
+        ORDER BY created_at DESC`;
+    db.all(sql, [], (err, rows) => {
+        if (err) return res.status(500).json({ success: false, message: "Unable to load registrations." });
+        res.json({ success: true, registrations: rows });
+    });
+});
+
+app.patch("/api/admin/registrations/:role/:id", (req, res) => {
+    const { role, id } = req.params;
+    const { status } = req.body;
+    if (!["student", "staff"].includes(role) || !["Approved", "Rejected", "Pending"].includes(status)) {
+        return res.status(400).json({ success: false, message: "Invalid role or status." });
+    }
+    const table = role === "student" ? "students" : "staff";
+    db.run(`UPDATE ${table} SET status = ? WHERE id = ?`, [status, id], function (err) {
+        if (err) return res.status(500).json({ success: false, message: "Unable to update registration." });
+        if (!this.changes) return res.status(404).json({ success: false, message: "Registration not found." });
+        res.json({ success: true, message: `Registration ${status.toLowerCase()}.` });
+    });
+});
 
 // ========================================
 // APPLY FOR LEAVE
@@ -599,6 +668,7 @@ app.get(
                 name,
                 email,
                 department,
+                status,
                 created_at
             FROM students
             ORDER BY created_at DESC
